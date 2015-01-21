@@ -1,0 +1,17 @@
+[package]
+
+name = "deglobber"
+version = "0.0.1"
+authors = ["Nicholas Cameron <nrc@ncameron.org>"]
+description = "tool to replace glob imports with non-glob imports"
+repository = "https://github.com/nick29581/deglobber"
+readme = "README.md"
+license = "Apache-2.0/MIT"
+
+[dependencies.reprint]
+reprint = "0.0.1"
+path = "/home/ncameron/reprint"
+
+[[bin]]
+name = "deglobber"
+path = "src/mod.rs"
