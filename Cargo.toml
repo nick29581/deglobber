@@ -12,6 +12,9 @@ license = "Apache-2.0/MIT"
 reprint = "0.0.1"
 path = "/home/ncameron/reprint"
 
+[dependencies]
+csv = "*"
+
 [[bin]]
 name = "deglobber"
 path = "src/mod.rs"

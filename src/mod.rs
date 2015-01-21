@@ -12,97 +12,78 @@
 #![feature(box_syntax)]
 
 extern crate reprint;
-extern crate rustc;
-extern crate rustc_driver;
-extern crate rustc_resolve;
-extern crate syntax;
+extern crate csv;
 
-use rustc::middle::ty::GlobMap;
-use rustc::session::build_session;
-use rustc::session::config::{self, Input};
-use rustc_driver::driver;
-use syntax::diagnostics::registry::Registry;
-use syntax::ast_map;
-use syntax::codemap::{CodeMap, Span};
+use std::collections::HashMap;
+use std::str::FromStr;
 
-// Use librustc to get glob information about a file
-fn parse_for_globs(path: &Path, callback: &Fn(&Path, &GlobMap, &ast_map::Map, &CodeMap) -> ()) {
-    let input = Input::File(path.clone());
+type GlobMap = Vec<HashMap<String, String>>;
 
-    let mut opts = config::basic_options();
-    // FIXME(#2) don't hardcode this
-    opts.maybe_sysroot = Some(Path::new("/home/ncameron/rust3/x86_64-unknown-linux-gnu/stage2"));
-    let reg = Registry::new(&rustc::DIAGNOSTICS);
-    let sess = build_session(opts, Some(path.clone()), reg);
-    let cfg = config::build_configuration(&sess);
-    let mut control = driver::CompileController::basic();
-    // FIXME: We can also stop after name resolution, rather than do the full analysis.
-    control.after_analysis.stop = true;
-    control.after_analysis.callback = box |state| {
-        let analysis = state.analysis.unwrap();
-        let glob_map = analysis.glob_map.as_ref().unwrap();
-        let ast_map = &analysis.ty_cx.map;
-        callback(path, glob_map, ast_map, state.session.codemap())
-    };
-    control.make_glob_map = rustc_resolve::MakeGlobMap::Yes;
+// Get glob information from saved analysis info.
+fn parse_for_globs(file_path: &Path,
+                   analysis_path: &Path,
+                   callback: &Fn(&Path, &GlobMap) -> ()) {
+    let mut analysis = csv::Reader::from_file(analysis_path);
+    analysis = analysis.has_headers(false);
+    analysis = analysis.flexible(true);
+    let mut globs = vec![];
+    for record in analysis.records() {
+        if let Ok(record) = record {
+            if record[0] == "use_glob" {
+                globs.push(parse_record(record));
+            }
+        }
+    }
 
-    driver::compile_input(sess, cfg, &input, &None, &None, None, control);
+    callback(file_path, &globs)
+}
+
+// Parse a CSV record of key,value pairs into a HashMap
+fn parse_record(record: Vec<String>) -> HashMap<String, String> {
+    let mut iter = record.into_iter();
+    let kind = iter.next().unwrap();
+    assert!(&kind[] == "use_glob");
+    let mut result = HashMap::new();
+    while let Some(r) = iter.next() {
+        result.insert(r, iter.next().unwrap());
+    }
+    result
 }
 
 // Print the expansion of globs.
-fn show(path: &Path, glob_map: &GlobMap, ast_map: &ast_map::Map, codemap: &CodeMap) {
-    for node_id in glob_map.keys() {
-        let names: Vec<_> = glob_map[*node_id].iter().map(|n| n.as_str()).collect();
-        let mut names_str = names.connect(", ");
-        if names.len() > 1 {
-            names_str = format!("{{{}}}", names_str);
+fn show(path: &Path, glob_map: &GlobMap) {
+    for glob in glob_map.iter() {
+        let mut names = glob["value".to_string()].clone();
+        if names.contains(",") {
+            names = format!("{{{}}}", names);
         }
-        let node = ast_map.expect_view_item(*node_id);
-        let line = codemap.lookup_char_pos(node.span.hi).line;
-        println!("{:?}:{} -> `{}`", path, line, names_str);
+        println!("{}:{} -> `{}`", path.display(), glob["file_line".to_string()], names);
     }
 }
 
 // Replace globs with non-glob imports.
-fn replace(path: &Path, glob_map: &GlobMap, ast_map: &ast_map::Map, codemap: &CodeMap) {
+fn replace(path: &Path, glob_map: &GlobMap) {
     let mut changes = vec![];
-    for node_id in glob_map.keys() {
-        let names: Vec<_> = glob_map[*node_id].iter().map(|n| n.as_str()).collect();
-        let mut names_str = names.connect(", ");
-        if names.len() > 1 {
-            names_str = format!("{{{}}}", names_str);
+    for glob in glob_map.iter() {
+        let mut names = glob["value".to_string()].clone();
+        if names.contains(",") {
+            names = format!("{{{}}}", names);
         }
-        let node = ast_map.expect_view_item(*node_id);
-        let span = node.span;
 
-        match find_glob_in_span(span, codemap) {
-            Some(loc) => {
-                let change = reprint::Change::new(loc, loc + 1, names_str);
-                changes.push(change);
-            }
-            None => {
-                // FIXME(#3): could handle errors better
-                println!("Unexpected: couldn't find glob in import `{}`",
-                         codemap.span_to_snippet(span).unwrap_or("<bad span>".to_string()));
-            }
-        }
+        let change = reprint::Change::new(
+            FromStr::from_str(&glob["extent_start_bytes".to_string()][]).unwrap(),
+            FromStr::from_str(&glob["extent_end_bytes".to_string()][]).unwrap(),
+            names);
+        changes.push(change);
     }
 
     reprint::reprint(path, changes);
 }
 
-// Sadly the span is for the whole view item, so we need to find the `*` within it.
-fn find_glob_in_span(span: Span, codemap: &CodeMap) -> Option<u32> {
-    let import = match codemap.span_to_snippet(span) {
-        Some(s) => s,
-        None => return None,
-    };
-    import.find_str("*").map(|x| x as u32 + span.lo.0)
-}
-
 fn main() {
     // TODO use args for this (see #1)
-    let path = Path::new("/home/ncameron/deglobber/data/hello.rs");
+    let file_path = Path::new("/home/ncameron/deglobber/data/hello.rs");
+    let analysis_path = Path::new("/home/ncameron/deglobber/data/hello.csv");
     // FIXME(#5) Should be user specified whether to show or replace.
-    parse_for_globs(&path, &replace);
+    parse_for_globs(&file_path, &analysis_path, &replace);
 }
