@@ -20,9 +20,8 @@ use std::str::FromStr;
 type GlobMap = Vec<HashMap<String, String>>;
 
 // Get glob information from saved analysis info.
-fn parse_for_globs(file_path: &Path,
-                   analysis_path: &Path,
-                   callback: &Fn(&Path, &GlobMap) -> ()) {
+fn parse_for_globs(analysis_path: &Path,
+                   callback: &Fn(&GlobMap, &Path) -> ()) {
     let mut analysis = csv::Reader::from_file(analysis_path);
     analysis = analysis.has_headers(false);
     analysis = analysis.flexible(true);
@@ -35,7 +34,7 @@ fn parse_for_globs(file_path: &Path,
         }
     }
 
-    callback(file_path, &globs)
+    callback(&globs, &analysis_path.dir_path())
 }
 
 // Parse a CSV record of key,value pairs into a HashMap
@@ -51,18 +50,18 @@ fn parse_record(record: Vec<String>) -> HashMap<String, String> {
 }
 
 // Print the expansion of globs.
-fn show(path: &Path, glob_map: &GlobMap) {
+fn show(glob_map: &GlobMap, _: &Path) {
     for glob in glob_map.iter() {
         let mut names = glob["value".to_string()].clone();
         if names.contains(",") {
             names = format!("{{{}}}", names);
         }
-        println!("{}:{} -> `{}`", path.display(), glob["file_line".to_string()], names);
+        println!("{}:{} -> `{}`", glob["file_name".to_string()], glob["file_line".to_string()], names);
     }
 }
 
 // Replace globs with non-glob imports.
-fn replace(path: &Path, glob_map: &GlobMap) {
+fn replace(glob_map: &GlobMap, root_path: &Path) {
     let mut changes = vec![];
     for glob in glob_map.iter() {
         let mut names = glob["value".to_string()].clone();
@@ -70,20 +69,25 @@ fn replace(path: &Path, glob_map: &GlobMap) {
             names = format!("{{{}}}", names);
         }
 
+        let mut path = Path::new(&glob["file_name".to_string()][]);
+        if !path.is_absolute() {
+            path = root_path.join(path);
+        }
+
         let change = reprint::Change::new(
+            path,
             FromStr::from_str(&glob["extent_start_bytes".to_string()][]).unwrap(),
             FromStr::from_str(&glob["extent_end_bytes".to_string()][]).unwrap(),
             names);
         changes.push(change);
     }
 
-    reprint::reprint(path, changes);
+    reprint::reprint(changes);
 }
 
 fn main() {
     // TODO use args for this (see #1)
-    let file_path = Path::new("/home/ncameron/deglobber/data/hello.rs");
     let analysis_path = Path::new("/home/ncameron/deglobber/data/hello.csv");
     // FIXME(#5) Should be user specified whether to show or replace.
-    parse_for_globs(&file_path, &analysis_path, &replace);
+    parse_for_globs(&analysis_path, &replace);
 }
